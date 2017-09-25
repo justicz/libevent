@@ -36,6 +36,7 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #ifdef EVENT__HAVE_SYS_TIME_H
 #include <sys/time.h>
 #endif
@@ -3095,6 +3096,95 @@ static void http_incomplete_test(void *arg)
 static void http_incomplete_timeout_test(void *arg)
 { http_incomplete_test_(arg, 1, 0); }
 
+static void
+http_fuzz_test(void *ptr)
+{
+	struct event_base *base = NULL;
+	struct bufferevent *bev;
+	char http_request[16384];
+	char ipcsocket[108];
+	struct sockaddr_un addr;
+	struct evhttp *http;
+	const struct timeval tv = { 0, 10000 };
+	size_t nread;
+	evutil_socket_t listenfd;
+	evutil_socket_t clientfd;
+
+	if (!strcmp(fuzzer_id, "NOT_FUZZING")) {
+		return;
+	}
+
+	fprintf(stdout, "Started HTTP fuzzer: %s\n", fuzzer_id);
+
+	// Make an abstract socket
+	memset(ipcsocket, 0, sizeof(ipcsocket));
+	strncat(ipcsocket + 1, fuzzer_id, sizeof(ipcsocket) - 2);
+
+	// Initialize the HTTP server & event base
+	base = event_base_new();
+	tt_assert(base);
+	http = evhttp_new(base);
+	evhttp_set_timeout_tv(http, &tv);
+
+	// Set up the abstract socket
+	listenfd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_UNIX;
+	tt_assert(sizeof(ipcsocket) <= sizeof(addr.sun_path));
+	memcpy(addr.sun_path, ipcsocket, sizeof(ipcsocket));
+
+	// Bind, listen, accept on the socket
+	bind(listenfd, (struct sockaddr*)&addr, sizeof(addr));
+	listen(listenfd, 128);
+	evhttp_accept_socket_with_handle(http, listenfd);
+
+	if (listenfd == -1) {
+		fprintf(stderr, "Couldn't open socket\n");
+		exit(1);
+	}
+
+	// Accept 1000 connections/execution, if we can
+	// (requires compilation with afl-clang-fast)
+	#ifdef __AFL_LOOP
+	while(__AFL_LOOP(1000)) {
+	#else
+	{
+	#endif
+		// Open a new client socket
+		clientfd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+		if (connect(clientfd, (struct sockaddr*)&addr, sizeof(addr)) == -1) {
+			fprintf(stderr, "Couldn't connect to socket\n");
+			exit(1);
+		}
+
+		// Set up a bufferevent for the client socket
+		bev = bufferevent_socket_new(base, clientfd, 0);
+		bufferevent_setcb(bev, http_readcb, http_incomplete_writecb,
+			http_errorcb, base);
+		bufferevent_base_set(base, bev);
+
+		// Read fuzzer input
+		nread = read(0, http_request, sizeof(http_request));
+
+		// Write over the channel
+		bufferevent_write(bev, http_request, nread);
+
+		// Dispatch (can timeout)
+		event_base_dispatch(base);
+
+		// Clean up the client socket
+		evutil_closesocket(clientfd);
+
+		bufferevent_free(bev);
+	}
+
+	evhttp_free(http);
+
+	event_base_free(base);
+
+end:
+	exit(0);
+}
 
 /*
  * the server is going to reply with chunked data.
@@ -4559,6 +4649,7 @@ static void https_persist_connection_test(void *arg)
 struct testcase_t http_testcases[] = {
 	{ "primitives", http_primitives, 0, NULL, NULL },
 	{ "base", http_base_test, TT_FORK, NULL, NULL },
+	{ "fuzz", http_fuzz_test, 0, NULL, NULL },
 	{ "bad_headers", http_bad_header_test, 0, NULL, NULL },
 	{ "parse_query", http_parse_query_test, 0, NULL, NULL },
 	{ "parse_uri", http_parse_uri_test, 0, NULL, NULL },

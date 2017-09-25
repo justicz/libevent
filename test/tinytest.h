@@ -37,6 +37,8 @@
 /** If you add your own flags, make them start at this point. */
 #define TT_FIRST_USER_FLAG (1<<4)
 
+extern const char *fuzzer_id;
+
 typedef void (*testcase_fn)(void *);
 
 struct testcase_t;

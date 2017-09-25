@@ -65,6 +65,7 @@ static int in_tinytest_main = 0; /**< true if we're in tinytest_main().*/
 static int n_ok = 0; /**< Number of tests that have passed */
 static int n_bad = 0; /**< Number of tests that have failed. */
 static int n_skipped = 0; /**< Number of tests that have been skipped. */
+const char *fuzzer_id = "NOT_FUZZING"; /**< ID of this particular fuzzer */
 
 static int opt_forked = 0; /**< True iff we're called from inside a win32 fork*/
 static int opt_nofork = 0; /**< Suppress calls to fork() for debugging. */
@@ -409,6 +410,11 @@ tinytest_main(int c, const char **v, struct testgroup_t *groups)
 				usage(groups, 0);
 			} else if (!strcmp(v[i], "--list-tests")) {
 				usage(groups, 1);
+			} else if (!strcmp(v[i], "--fuzzer-id")) {
+				if (i < c - 1) {
+					fuzzer_id = v[i + 1];
+					i += 1;
+				}
 			} else {
 				printf("Unknown option %s.  Try --help\n",v[i]);
 				return -1;
